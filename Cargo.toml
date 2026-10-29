@@ -1,0 +1,25 @@
+[package]
+name = "vr-imageview"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+opt-level = "z"     # Optimize for size ("z" aggressively reduces size, "s" balances speed/size)
+lto = true          # Enable Link-Time Optimization (removes unused dead code across crates)
+codegen-units = 1   # Reduce parallel code generation units to 1 to maximize size optimizations
+strip = true        # Automatically strip symbols and debug info from the binary
+panic = "abort"     # Remove panic unwinding overhead (removes stack unwinding code)
+
+[dependencies]
+ash = "0.38.0"
+bytemuck = "1.25.2"
+clap = { version = "4.6.7", features = ["derive"] }
+ctrlc = "3.5.2"
+env_logger = "0.11.11"
+image = "0.25.10"
+log = "0.4.34"
+nalgebra = "0.35.0"
+openxr = { version = "0.22.0", features = ["static", "loaded"] }
+png = "0.18.1"
+wgpu = { version = "30.0.1", features = ["wgsl"], default-features = false }
+wgpu-hal = { version = "30.0.1", features = ["vulkan"] }

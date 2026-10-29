@@ -1,0 +1,16 @@
+# ./target/debug/vr-imageview ./4774-b4dca25f-9856-41ba-b0c0-ed6eb77efa3f.png
+[2026-10-29T13:00:13Z INFO  vr_imageview] Starting VR image viewer with ./4774-b4dca25f-9856-41ba-b0c0-ed6eb77efa3f.png
+[2026-10-29T13:00:13Z INFO  wgpu_hal::vulkan::adapter] Found 6 cooperative matrix configurations supported by wgpu
+[2026-10-29T13:00:13Z INFO  vr_imageview] XR context created
+[2026-10-29T13:00:14Z INFO  vr_imageview] Loaded texture
+[2026-10-29T13:00:14Z INFO  vr_imageview] XR Session state changed to: IDLE
+[2026-10-29T13:00:14Z INFO  vr_imageview] XR Session state changed to: READY
+[2026-10-29T13:30:07Z INFO  vr_imageview] XR Session started
+[2026-10-29T13:30:08Z INFO  vr_imageview] XR Session state changed to: SYNCHRONIZED
+[2026-10-29T13:30:08Z INFO  vr_imageview] XR Session state changed to: VISIBLE
+[2026-10-29T13:30:08Z INFO  vr_imageview] XR Session state changed to: FOCUSED
+^C[2026-10-29T13:30:08Z INFO  vr_imageview] Received CTRL-C, shutting down
+[2026-10-29T13:30:08Z DEBUG vr_imageview] Exited main loop, draining GPU work before quitting
+[2026-10-29T13:30:08Z DEBUG vr_imageview] Dropped scene
+[2026-10-29T13:30:08Z DEBUG vr_imageview] Shut down xr context
+zsh: segmentation fault (core dumped)  RUST_BACKTRACE=full RUST_LOG=debug cargo run --
