@@ -11,7 +11,8 @@ var samp: sampler;
 
 struct CameraUniform {
     mat: mat3x3<f32>,
-    perspective_correction: u32
+    perspective_correction: u32,
+    image_scale: vec2<f32>
 };
 
 @group(1) @binding(0)
@@ -30,14 +31,14 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, @builtin(view_index) view: 
 
     out.position = vec4(positions[vertex_index], 0.0, 1.0) * vec4(1, -1, 0, 1);
 
-    var ipd_offsets = array<vec2<f32>, 2>(
+    var perspective_offsets = array<vec2<f32>, 2>(
         vec2<f32>(-0.15, 0.0),
         vec2<f32>(0.15, 0.0)
     );
 
-    let possible_ipd_offset = select(vec2(0, 0), ipd_offsets[view], camera.perspective_correction > 0);
+    let possible_perspective_offset = select(vec2(0, 0), perspective_offsets[view], camera.perspective_correction > 0);
 
-    out.uv = (camera.mat * vec3(positions[vertex_index] + possible_ipd_offset, 1.0)).xy;
+    out.uv = (camera.mat * vec3((positions[vertex_index]) + possible_perspective_offset, 1.0)).xy / camera.image_scale;
     
     return out;
 }

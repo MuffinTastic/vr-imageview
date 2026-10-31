@@ -20,6 +20,5 @@ image = "0.25.10"
 log = "0.4.34"
 nalgebra = "0.35.0"
 openxr = { version = "0.22.0", features = ["static", "loaded"] }
-png = "0.18.1"
 wgpu = { version = "30.0.1", features = ["wgsl"], default-features = false }
 wgpu-hal = { version = "30.0.1", features = ["vulkan"] }

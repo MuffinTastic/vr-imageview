@@ -1,18 +1,13 @@
 use std::{
-    ffi::c_void,
-    io,
-    ops::Mul,
-    path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-    },
-    time::Instant,
+    ffi::c_void, io, ops::Mul, path::{Path, PathBuf}, sync::{
+        Arc, atomic::{AtomicBool, AtomicU32, Ordering}, mpsc::RecvTimeoutError,
+    }, time::Instant,
 };
 
 use ash::vk::{self, Handle};
 use clap::Parser;
 use env_logger::{DEFAULT_FILTER_ENV, Env};
+use image::ImageReader;
 use log::{debug, info, warn};
 use wgpu::util::DeviceExt;
 
@@ -24,15 +19,22 @@ const MULTIVIEW_MASK: Option<std::num::NonZeroU32> = std::num::NonZeroU32::new(0
 #[derive(Parser, Debug)]
 #[command(name = "vr-imageview", about = "Display an image in VR")]
 pub struct Args {
-    #[arg(help = "The image to display in the headset (PNG only)")]
+    #[arg(help = "The image to display in the headset")]
     pub image: PathBuf,
 
     #[arg(
         long,
         short,
-        help = "Don't apply perspective correction by default while rendering"
+        help = "Don't apply perspective correction by default while rendering (Y button to toggle)"
     )]
     pub no_perspective_correction: bool,
+
+    #[arg(
+        long,
+        short,
+        help = "Default to displaying with a 1:1 aspect ratio (B button to toggle)"
+    )]
+    pub square: bool,
 
     #[arg(long, short, help = "Print FPS counter")]
     pub fps: bool,
@@ -133,7 +135,7 @@ fn main() {
         timeout: None,
     });
 
-    let (entry, instance) = xr_context.take_vk_instance();
+    let (entry, _instance) = xr_context.take_vk_instance();
 
     drop(scene);
     debug!("Dropped scene");
@@ -145,8 +147,6 @@ fn main() {
     debug!("Dropped queue");
     drop(wg_device);
     debug!("Dropped device");
-    drop(instance);
-    debug!("Dropped instance");
     drop(entry);
 
     debug!("Dropped everything")
@@ -154,12 +154,12 @@ fn main() {
 
 fn fps_thread(frames: Arc<AtomicU32>, frame_kill_recv: std::sync::mpsc::Receiver<()>) {
     loop {
-        let count = frames.load(Ordering::Relaxed);
+        let count = frames.swap(0, Ordering::Relaxed);
         info!("FPS: {count}");
-        frames.store(0, Ordering::Relaxed);
 
-        if let Ok(()) = frame_kill_recv.recv_timeout(std::time::Duration::from_secs(1)) {
-            break;
+        match frame_kill_recv.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => (),
         }
     }
 }
@@ -330,9 +330,10 @@ pub struct XrContext {
     xr_zoom_action: openxr::Action<openxr::Vector2f>,
     xr_rotate_ccw_action: openxr::Action<f32>,
     xr_rotate_cw_action: openxr::Action<f32>,
-    xr_filter_action: openxr::Action<bool>,
+    xr_clamp_action: openxr::Action<bool>,
     xr_perspective_action: openxr::Action<bool>,
     xr_reset_action: openxr::Action<bool>,
+    xr_aspect_action: openxr::Action<bool>,
     xr_action_set: openxr::ActionSet,
 
     xr_space: openxr::Space,
@@ -628,9 +629,9 @@ impl XrContext {
             .create_action::<f32>("cw", "Rotate CW", &[])
             .expect("create cw action");
 
-        let xr_filter_action = xr_action_set
-            .create_action::<bool>("filter", "Change Filter", &[])
-            .expect("create filter action");
+        let xr_clamp_action = xr_action_set
+            .create_action::<bool>("clamp", "Change Clamp", &[])
+            .expect("create clamp action");
 
         let xr_perspective_action = xr_action_set
             .create_action::<bool>("perspective", "Toggle perspective correction", &[])
@@ -639,6 +640,10 @@ impl XrContext {
         let xr_reset_action = xr_action_set
             .create_action::<bool>("reset", "Reset", &[])
             .expect("create reset action");
+
+        let xr_aspect_action = xr_action_set
+            .create_action::<bool>("aspect", "Toggle Aspect Ratio", &[])
+            .expect("create aspect action");
 
         xr_instance
             .suggest_interaction_profile_bindings(
@@ -671,7 +676,7 @@ impl XrContext {
                             .expect("right trigger path"),
                     ),
                     openxr::Binding::new(
-                        &xr_filter_action,
+                        &xr_clamp_action,
                         xr_instance
                             .string_to_path("/user/hand/left/input/x/click")
                             .expect("left x path"),
@@ -687,6 +692,12 @@ impl XrContext {
                         xr_instance
                             .string_to_path("/user/hand/right/input/a/click")
                             .expect("right a path"),
+                    ),
+                    openxr::Binding::new(
+                        &xr_aspect_action,
+                        xr_instance
+                            .string_to_path("/user/hand/right/input/b/click")
+                            .expect("right b path"),
                     ),
                 ],
             )
@@ -728,9 +739,10 @@ impl XrContext {
             xr_zoom_action,
             xr_rotate_ccw_action,
             xr_rotate_cw_action,
-            xr_filter_action,
+            xr_clamp_action,
             xr_perspective_action,
             xr_reset_action,
+            xr_aspect_action,
         };
 
         info!("XR context created");
@@ -739,7 +751,10 @@ impl XrContext {
     }
 
     fn take_vk_instance(&mut self) -> (ash::Entry, ash::Instance) {
-        (self._vk_entry.take().unwrap(), self._vk_instance.take().unwrap())
+        (
+            self._vk_entry.take().unwrap(),
+            self._vk_instance.take().unwrap(),
+        )
     }
 
     fn get_recommended_resolution(
@@ -993,10 +1008,10 @@ impl XrContext {
             .state(&self.xr_session, openxr::Path::NULL)
             .expect("xr cw action state");
 
-        let filter_state = self
-            .xr_filter_action
+        let clamp_state = self
+            .xr_clamp_action
             .state(&self.xr_session, openxr::Path::NULL)
-            .expect("xr filter action state");
+            .expect("xr clamp action state");
 
         let perspective_state = self
             .xr_perspective_action
@@ -1007,6 +1022,11 @@ impl XrContext {
             .xr_reset_action
             .state(&self.xr_session, openxr::Path::NULL)
             .expect("xr reset action state");
+
+        let aspect_state = self
+            .xr_aspect_action
+            .state(&self.xr_session, openxr::Path::NULL)
+            .expect("xr aspect action state");
 
         let movement =
             nalgebra::Vector2::new(move_state.current_state.x, move_state.current_state.y);
@@ -1032,22 +1052,24 @@ impl XrContext {
             0.0
         };
 
-        let rot = -ccw_state.current_state + cw_state.current_state;
+        let rot = ccw_state.current_state - cw_state.current_state;
 
-        let change_filter = filter_state.changed_since_last_sync && filter_state.current_state;
+        let change_clamp = clamp_state.changed_since_last_sync && clamp_state.current_state;
 
         let toggle_perspective_correction =
             perspective_state.changed_since_last_sync && perspective_state.current_state;
 
         let reset = reset_state.changed_since_last_sync && reset_state.current_state;
+        let toggle_aspect = aspect_state.changed_since_last_sync && aspect_state.current_state;
 
         XrInputSnapshot {
             movement,
             zoom,
             rot,
-            change_filter,
+            change_clamp,
             toggle_perspective_correction,
             reset,
+            toggle_aspect,
         }
     }
 
@@ -1064,9 +1086,10 @@ pub struct XrInputSnapshot {
     movement: nalgebra::Vector2<f32>,
     zoom: f32,
     rot: f32,
-    change_filter: bool,
+    change_clamp: bool,
     reset: bool,
     toggle_perspective_correction: bool,
+    toggle_aspect: bool,
 }
 
 pub struct Scene {
@@ -1074,7 +1097,7 @@ pub struct Scene {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
 
-    image_filter_index: usize,
+    image_clamp_index: usize,
 
     _image_texture: wgpu::Texture,
     _image_texture_view: wgpu::TextureView,
@@ -1094,11 +1117,11 @@ impl Scene {
         swapchain_format: wgpu::TextureFormat,
         perspective_correction: bool,
     ) -> Scene {
-        let camera = Camera::new(perspective_correction);
-
         let image_data = read_image(image_path).expect("png image data");
         let (image_texture, image_texture_view, image_samplers) =
-            Scene::create_and_upload_texture(wg_device, wg_queue, image_data);
+            Scene::create_and_upload_texture(wg_device, wg_queue, &image_data);
+
+        let camera = Camera::new(perspective_correction, image_data.size);
 
         info!("Loaded texture");
 
@@ -1232,7 +1255,7 @@ impl Scene {
             camera_buffer,
             camera_bind_group,
 
-            image_filter_index: 0,
+            image_clamp_index: 0,
             _image_texture: image_texture,
             _image_texture_view: image_texture_view,
             image_samplers,
@@ -1247,7 +1270,7 @@ impl Scene {
     fn create_and_upload_texture(
         wg_device: &wgpu::Device,
         wg_queue: &wgpu::Queue,
-        image_data: ImageData,
+        image_data: &ImageData,
     ) -> (wgpu::Texture, wgpu::TextureView, [wgpu::Sampler; 4]) {
         let texture_size = wgpu::Extent3d {
             width: image_data.size.x,
@@ -1316,6 +1339,11 @@ impl Scene {
             info!("Toggled perspective correction");
         }
 
+        if xr_input_snapshot.toggle_aspect {
+            self.camera.toggle_aspect();
+            info!("Toggled square aspect ratio");
+        }
+
         self.camera.rotate(xr_input_snapshot.rot * delta);
         self.camera.zoom(xr_input_snapshot.zoom * delta);
         self.camera.translate(
@@ -1325,14 +1353,14 @@ impl Scene {
                 * delta,
         );
 
-        if xr_input_snapshot.change_filter {
-            self.image_filter_index += 1;
+        if xr_input_snapshot.change_clamp {
+            self.image_clamp_index += 1;
 
-            if self.image_filter_index > 3 {
-                self.image_filter_index = 0;
+            if self.image_clamp_index > 3 {
+                self.image_clamp_index = 0;
             }
 
-            info!("Changed image display setting");
+            info!("Changed image clamp setting");
         }
     }
 
@@ -1349,11 +1377,11 @@ impl Scene {
     }
 
     pub fn image_sampler(&self) -> &wgpu::Sampler {
-        &self.image_samplers[self.image_filter_index]
+        &self.image_samplers[self.image_clamp_index]
     }
 
     pub fn image_bind_group(&self) -> &wgpu::BindGroup {
-        &self.image_bind_groups[self.image_filter_index]
+        &self.image_bind_groups[self.image_clamp_index]
     }
 
     pub fn camera_bind_group(&self) -> &wgpu::BindGroup {
@@ -1367,6 +1395,10 @@ pub struct Camera {
     zoom_vis: f32,
     rotate: f32,
     perspective_correction: bool,
+
+    // I've stopped caring where data belongs at this point
+    image_dims: nalgebra::Vector2<f32>,
+    image_square: bool,
 }
 
 impl Camera {
@@ -1379,13 +1411,20 @@ impl Camera {
     // Idk
     const ZOOM_SPEED_PER_S: f32 = 1.0;
 
-    pub fn new(perspective_correction: bool) -> Camera {
+    pub fn new(perspective_correction: bool, image_dims: nalgebra::Vector2<u32>) -> Camera {
+        let image_dims = image_dims.cast();
+
+        debug!("{image_dims}");
+
         Camera {
             position: nalgebra::Vector2::new(0.5, 0.5),
             zoom_raw: 0.0,
             zoom_vis: 1.0,
             rotate: 0.0,
             perspective_correction,
+
+            image_dims,
+            image_square: false,
         }
     }
 
@@ -1398,6 +1437,10 @@ impl Camera {
 
     pub fn toggle_perspective_correction(&mut self) {
         self.perspective_correction = !self.perspective_correction;
+    }
+
+    fn toggle_aspect(&mut self) {
+        self.image_square = !self.image_square;
     }
 
     /// Affected by zoom level
@@ -1424,7 +1467,8 @@ impl Camera {
 pub struct CameraUniform {
     mat: [[f32; 4]; 3],
     perspective_correction: u32,
-    _pad: [u32; 3],
+    _pad: [u32; 1],
+    image_scale: [f32; 2],
 }
 
 impl From<&Camera> for CameraUniform {
@@ -1437,10 +1481,18 @@ impl From<&Camera> for CameraUniform {
 
         let mat_padded = mat.map(|r| [r[0], r[1], r[2], 1f32]);
 
+        let image_scale = if camera.image_square {
+            [1.0, 1.0]
+        } else {
+            let scale = 1.0 / camera.image_dims.max();
+            (camera.image_dims * scale).into()
+        };
+
         CameraUniform {
             mat: mat_padded,
             perspective_correction: if camera.perspective_correction { 1 } else { 0 },
-            _pad: [0; 3],
+            image_scale,
+            _pad: [0; 1],
         }
     }
 }
@@ -1451,56 +1503,20 @@ pub struct ImageData {
 }
 
 fn read_image(path: &Path) -> io::Result<ImageData> {
-    let img = ImageReader::open(path)?.decode()?;
+    let img = ImageReader::open(path)?
+        .decode()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "couldnt decode"))?;
 
+    let size = nalgebra::Vector2::new(img.width(), img.height());
 
-    
-
-    let data = std::fs::read(path)?;
-
-    let decoder = png::Decoder::new(std::io::Cursor::new(data));
-    let mut reader = decoder.read_info()?;
-
-    let len = reader.output_buffer_size().expect("png too big");
-    let mut data = vec![0u8; len];
-    let info = reader.next_frame(&mut data)?;
-
-    if info.width > 16384 || info.height > 16384 {
+    if size.x > 16384 || size.y > 16384 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "png dimensions above 16384",
         ));
     }
 
-    if info.color_type != png::ColorType::Rgba {
-        if info.color_type == png::ColorType::Rgb {
-            debug!("converting rgb image to rgba with solid 255 alpha");
-            data = image_data_add_alpha(&data);
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "png colors not rgb / rgba",
-            ));
-        }
-    }
-
-    if info.bit_depth != png::BitDepth::Eight {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "png colors not 8 bit depth",
-        ));
-    }
-
-    let size = nalgebra::Vector2::new(info.width, info.height);
+    let data = img.to_rgba8().into_raw();
 
     Ok(ImageData { size, data })
-}
-
-fn image_data_add_alpha(input: &[u8]) -> Vec<u8> {
-    input
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .flat_map(|&[r, g, b]| [r, g, b, 255])
-        .collect()
 }
