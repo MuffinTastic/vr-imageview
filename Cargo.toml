@@ -15,10 +15,15 @@ ash = "0.38.0"
 bytemuck = "1.25.2"
 clap = { version = "4.6.7", features = ["derive"] }
 ctrlc = "3.5.2"
-env_logger = "0.11.11"
-image = "0.25.10"
+env_logger = { version = "0.11.11", default-features = false, features = ["auto-color", "humantime"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "tga", "bmp"] }
 log = "0.4.34"
 nalgebra = "0.35.0"
 openxr = { version = "0.22.0", features = ["static", "loaded"] }
-wgpu = { version = "30.0.1", features = ["wgsl"], default-features = false }
+thiserror = "2.0.21"
+wgpu = { version = "30.0.1", default-features = false, features = ["spirv"] }
 wgpu-hal = { version = "30.0.1", features = ["vulkan"] }
+
+[build-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in", "spv-out"] }
+bytemuck = "1.25.2"
