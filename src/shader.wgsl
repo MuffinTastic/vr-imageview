@@ -32,8 +32,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, @builtin(view_index) view: 
     out.position = vec4(positions[vertex_index], 0.0, 1.0);
 
     var perspective_offsets = array<vec2<f32>, 2>(
-        vec2<f32>(-0.15, 0.0),
-        vec2<f32>(0.15, 0.0)
+        vec2<f32>(-0.075, 0.0),
+        vec2<f32>(0.075, 0.0)
     );
 
     let possible_perspective_offset = select(vec2(0, 0), perspective_offsets[view], uniform_buf.camera_perspective_correction > 0);
