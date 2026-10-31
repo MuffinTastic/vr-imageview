@@ -6,6 +6,8 @@ Sometimes you need a reproducible way to diagnose display issues with distortion
 
 \* Still goes through the compositor of your OpenXR runtime of choice.
 
+![Image showing the program running, through SteamVR's VR mirror window](./media/Screenshot_20261031_033544.png)
+
 ## Usage
 
 `vr-imageview path/to/image`
