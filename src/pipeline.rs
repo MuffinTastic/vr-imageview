@@ -20,12 +20,15 @@ impl Pipeline {
         // Unfortunately wgpu doesn't support skipping naga yet...
         // https://github.com/gfx-rs/wgpu/issues/9052
 
-        let spirv: &[u32] = bytemuck::cast_slice(include_bytes!(env!("SHADER_SPV_PATH")));
+        let spirv: Vec<u32> = include_bytes!(env!("SHADER_SPV_PATH"))
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
 
         let _shader = unsafe {
             wgpu_device.create_shader_module_passthrough(wgpu::ShaderModuleDescriptorPassthrough {
                 label: Some("combined shader"),
-                spirv: Some(std::borrow::Cow::Borrowed(spirv)),
+                spirv: Some(std::borrow::Cow::Borrowed(&spirv)),
                 entry_points: Cow::Borrowed(&[
                     wgpu::PassthroughShaderEntryPoint {
                         name: Cow::Borrowed("vs_main"),
